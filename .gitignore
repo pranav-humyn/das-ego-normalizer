@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+normalized_sample/
+output/
+frames/
+scratch_input/
+docker_test_output/

@@ -1,0 +1,4 @@
+mcap==1.4.0
+mcap-protobuf-support==0.5.4
+opencv-python-headless==5.0.0.93
+numpy==2.0.2
