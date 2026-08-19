@@ -6,21 +6,9 @@ IMU data.
 
 ## Input
 
-One DAS-EGO `.mcap` file — a head-mounted rig (GenRobot AI) with 6 cameras
-(`camera0`–`camera5`), 1 IMU, and a microphone, all recorded into a single
-container file. Raw files live at
-`s3://stage-humyn-egocentric-stereo-data/raw/DAS-EGO/`.
-
-Read via the official `mcap` + `mcap-protobuf-support` libraries — no custom
-parsing needed for the container itself. Two things worth knowing about the
-data inside it:
-- Each camera's "compressed image" messages are actually raw H.264
-  elementary-stream chunks, not one-JPEG-per-message — they're concatenated
-  in timestamp order before being repackaged as an mp4.
-- Each camera's `camera_info` message carries its own intrinsics (Double
-  Sphere lens model — see below) and its 3D position/orientation relative
-  to the rig body (`T_b_c`). There is no separate calibration file; it's
-  embedded in the MCAP.
+One DAS-EGO `.mcap` file — a head-mounted rig (GenRobot AI) with 6 cameras,
+1 IMU, and a microphone, all recorded into a single container file. Raw
+files live at `s3://stage-humyn-egocentric-stereo-data/raw/DAS-EGO/`.
 
 ## Output
 
@@ -35,40 +23,6 @@ Running the normalizer on one `.mcap` produces a folder containing:
 | `calibration.json` | Per-camera intrinsics (raw + rectified), stereo baseline/rotation/translation |
 | `meta.json` | Device identity, recording dimensions/fps/duration, source file info, encoding settings |
 | `imu.csv` | `timestamp_s,ax,ay,az,gx,gy,gz` — accel in m/s², gyro in rad/s, timestamps relative to the start of the recording |
-
-## Which 2 of the 6 cameras become the stereo pair
-
-Never assumed from camera names — confirmed from geometry every run. Each
-camera's `T_b_c` gives its exact position and orientation; for every
-possible pair (15 total), the normalizer computes the distance between them
-(baseline) and the angle between their facing directions (axis angle). A
-real stereo pair has a small baseline (a few cm) **and** a near-zero axis
-angle. On the validated sample, only `camera2`/`camera3` qualify (5.78cm
-baseline, 0.2° axis angle) — other candidate pairs have a similar baseline
-but a 20°+ axis mismatch, meaning they point in different directions.
-
-## The lens model
-
-DAS-EGO's `camera_info.distortion_model` reads `"ds"` — the **Double
-Sphere** model (Usenko, Demmel, Cremers, 3DV 2018), a 6-parameter wide-angle
-lens model (`fx, fy, cx, cy, xi, alpha`). This isn't supported by OpenCV's
-built-in fisheye functions, so the projection/unprojection math is
-implemented directly from the paper's equations in `normalize.py`, and
-self-tested (project → unproject → project on a grid of pixels, checking
-for the same pixel back) before being trusted on real frames.
-
-## Verifying correctness
-
-- **Self-test**: round-trip projection error on a pixel grid, checked
-  automatically on every run before rectifying (must be <0.01px).
-- **Disparity check**: ORB feature-matching between the rectified left/right
-  frames — matched points should shift sideways in one consistent direction
-  (confirms which camera is really left vs. right) with ~0 vertical
-  offset. On the validated sample: 100% consistently-signed horizontal
-  disparity, ~4px mean vertical residual on 1600px-wide frames.
-- **IMU sanity**: gravity magnitude at rest should be ~9.8 m/s² once
-  converted (DAS-EGO stores raw accel in g-units — the normalizer converts
-  this before writing `imu.csv`).
 
 ## Running it
 
@@ -87,8 +41,23 @@ docker run --rm \
   das-ego-normalizer /input/<name>.mcap /output
 ```
 
-## Current status
+## Important notes
 
-Validated end-to-end on one sample file (11.9MB, ~4s). Running this across
-the full DAS-EGO corpus (files run up to ~24GB) is the next step — not yet
-done.
+- **The stereo pair isn't hardcoded.** Of the 6 cameras, only 2 are
+  physically mounted as a true stereo pair (currently `camera2`/`camera3`).
+  The script confirms this from geometry (position + facing direction) on
+  every run rather than assuming it — re-verify if a rig revision changes
+  camera placement.
+- **Lens model is Double Sphere, not standard fisheye.** DAS-EGO's cameras
+  use the Double Sphere model (6 parameters: `fx, fy, cx, cy, xi, alpha`),
+  which OpenCV doesn't support natively — the projection math is
+  implemented directly in `normalize.py` and self-tested on every run
+  before being trusted (must be <0.01px round-trip error, or the script
+  aborts).
+- **IMU accel is unit-converted.** DAS-EGO stores raw acceleration in
+  g-units; `imu.csv` converts this to m/s² automatically. Gravity at rest
+  should read ~9.8 in the output file.
+- **Validated so far**: 3 real clips from the same rig/session (3.8s,
+  ~8s, and 32.9s), checked via stereo self-test, feature-based disparity
+  check, and IMU sanity checks. Not yet run across the full DAS-EGO corpus
+  or a different rig/session.
